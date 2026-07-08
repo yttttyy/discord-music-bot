@@ -4,16 +4,16 @@ const { inSameVoice } = require('../utils');
 
 module.exports = {
   name: 'pause',
-  aliases: [],
+  aliases: ['пауз'],
   description: 'Поставить воспроизведение на паузу',
   usage: 'pause',
   async execute(message) {
     const queue = getQueue(message.guild.id);
     if (!queue || !queue.current) {
-      return message.reply({ embeds: [infoEmbed('🤷 Сейчас ничего не играет.')] });
+      return message.reply({ embeds: [infoEmbed('Сейчас ничего не играет.')] });
     }
     if (!inSameVoice(message, queue)) return;
     queue.pause();
-    return message.reply({ embeds: [infoEmbed('⏸️ Пауза.')] });
+    return message.reply({ embeds: [infoEmbed('Пауза.')] });
   },
 };

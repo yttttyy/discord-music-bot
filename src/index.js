@@ -14,6 +14,7 @@ const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const config = require('./config');
 const { initSources } = require('./sources');
 const { commands } = require('./commands');
+const { errorEmbed } = require('./embeds');
 
 const client = new Client({
   intents: [
@@ -42,7 +43,7 @@ client.on('messageCreate', async (message) => {
     await command.execute(message, args);
   } catch (err) {
     console.error(`Ошибка в команде "${name}":`, err);
-    message.reply('💥 Что-то пошло не так при выполнении команды.').catch(() => {});
+    message.reply({ embeds: [errorEmbed('Что-то пошло не так при выполнении команды.')] }).catch(() => {});
   }
 });
 

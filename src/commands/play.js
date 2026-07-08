@@ -5,15 +5,27 @@ const { inSameVoice } = require('../utils');
 
 module.exports = {
   name: 'play',
-  aliases: ['p'],
-  description: 'Воспроизвести трек по ссылке (YouTube/Spotify) или названию',
+  aliases: ['p', 'плей', 'п'],
+  description: 'Воспроизвести трек по ссылке (YouTube/Spotify) или названию; без аргументов — пауза/продолжить',
   usage: 'play <ссылка или название>',
   async execute(message, args) {
     const query = args.join(' ').trim();
+
+    // Без аргументов `!п`/`!плей` работает как переключатель пауза/продолжить.
     if (!query) {
-      return message.reply({
-        embeds: [errorEmbed('Укажи ссылку или название трека. Пример: `play never gonna give you up`')],
-      });
+      const queue = getQueue(message.guild.id);
+      if (!queue || !queue.current) {
+        return message.reply({
+          embeds: [errorEmbed('Укажи ссылку или название трека. Пример: `play never gonna give you up`')],
+        });
+      }
+      if (!inSameVoice(message, queue)) return;
+      if (queue.isPaused()) {
+        queue.resume();
+        return message.reply({ embeds: [infoEmbed('Продолжаю.')] });
+      }
+      queue.pause();
+      return message.reply({ embeds: [infoEmbed('Пауза.')] });
     }
 
     const voiceChannel = message.member?.voice?.channel;
@@ -30,7 +42,7 @@ module.exports = {
       return message.reply({ embeds: [errorEmbed('У меня нет прав подключаться или говорить в этом канале.')] });
     }
 
-    const loading = await message.reply({ embeds: [infoEmbed('🔎 Ищу...')] });
+    const loading = await message.reply({ embeds: [infoEmbed('Ищу...')] });
 
     let tracks;
     try {
@@ -40,7 +52,7 @@ module.exports = {
     }
 
     if (!tracks.length) {
-      return loading.edit({ embeds: [infoEmbed('😕 Ничего не нашёл по этому запросу.')] });
+      return loading.edit({ embeds: [infoEmbed('Ничего не нашёл по этому запросу.')] });
     }
 
     // Пока шёл поиск, бот мог выйти из канала (!stop / авто-выход) — перечитываем.
@@ -57,7 +69,7 @@ module.exports = {
         embeds: [
           queue.current
             ? addedEmbed(t, queue.tracks.length)
-            : infoEmbed(`▶️ Запускаю: **${t.title}** \`(${formatDuration(t.duration)})\``),
+            : infoEmbed(`Запускаю: **${t.title}** \`(${formatDuration(t.duration)})\``),
         ],
       });
     } else {

@@ -4,17 +4,17 @@ const { inSameVoice } = require('../utils');
 
 module.exports = {
   name: 'skip',
-  aliases: ['s', 'next'],
+  aliases: ['s', 'next', 'скип', 'с'],
   description: 'Пропустить текущий трек',
   usage: 'skip',
   async execute(message) {
     const queue = getQueue(message.guild.id);
     if (!queue || !queue.current) {
-      return message.reply({ embeds: [infoEmbed('🤷 Сейчас ничего не играет.')] });
+      return message.reply({ embeds: [infoEmbed('Сейчас ничего не играет.')] });
     }
     if (!inSameVoice(message, queue)) return;
     const title = queue.current.title;
     queue.skip();
-    return message.reply({ embeds: [infoEmbed(`⏭️ Пропущено: **${title}**`)] });
+    return message.reply({ embeds: [infoEmbed(`Пропущено: **${title}**`)] });
   },
 };

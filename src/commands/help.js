@@ -3,7 +3,7 @@ const { helpEmbed } = require('../embeds');
 
 module.exports = {
   name: 'help',
-  aliases: ['h', 'commands'],
+  aliases: ['h', 'commands', 'хелп', 'х', 'команды'],
   description: 'Список команд',
   usage: 'help',
   async execute(message) {

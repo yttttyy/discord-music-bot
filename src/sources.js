@@ -43,11 +43,15 @@ const COOKIES = cookieArgs();
 // при неудаче (18+ / «подтвердите возраст») — повтор с куками. В этом случае
 // прямую ссылку использовать нельзя (403 для ffmpeg), стримим через yt-dlp.
 async function extractInfo(url, flags = {}) {
+  // false-значения не передаём: youtube-dl-exec превращает `noPlaylist: false`
+  // в несуществующий флаг `--no-no-playlist`, и yt-dlp падает.
+  const opts = { ...COMMON, ...flags };
+  for (const k of Object.keys(opts)) if (opts[k] === false) delete opts[k];
   try {
-    return { info: await ytdlp(url, { ...COMMON, ...flags }), viaCookies: false };
+    return { info: await ytdlp(url, opts), viaCookies: false };
   } catch (e) {
     if (!Object.keys(COOKIES).length) throw e;
-    return { info: await ytdlp(url, { ...COMMON, ...COOKIES, ...flags }), viaCookies: true };
+    return { info: await ytdlp(url, { ...opts, ...COOKIES }), viaCookies: true };
   }
 }
 
@@ -203,6 +207,44 @@ async function resolveQuery(query, requestedBy) {
   return t ? [t] : [];
 }
 
+// Сколько треков набирать в радио-очередь из YouTube Mix.
+const RADIO_LIMIT = 25;
+
+// Радио: похожие треки через YouTube Mix (list=RD<videoId>).
+// Возвращает { seed, tracks }: затравка первой, дальше — ленивые треки микса
+// (без streamUrl; ensureResolved дорезолвит их перед воспроизведением).
+async function resolveRadio(query, requestedBy) {
+  const [seed] = await resolveQuery(query, requestedBy);
+  if (!seed) throw new Error('Ничего не нашёл по этому запросу.');
+  if (!seed.url) await ensureResolved(seed);
+
+  const m = (seed.url || '').match(/[?&]v=([\w-]{11})/) || (seed.url || '').match(/youtu\.be\/([\w-]{11})/);
+  if (!m) throw new Error('Не удалось определить трек-затравку для радио.');
+  const id = m[1];
+
+  const { info } = await extractInfo(`https://www.youtube.com/watch?v=${id}&list=RD${id}`, {
+    noPlaylist: false,
+    flatPlaylist: true,
+    dumpSingleJson: true,
+    playlistEnd: RADIO_LIMIT,
+  });
+  // Первый элемент микса — сама затравка; вместо него ставим уже
+  // отрезолвленный seed, чтобы радио стартовало мгновенно и без дубля.
+  const rest = (info.entries || [])
+    .filter((e) => e && e.id && e.id !== id)
+    .map((e) =>
+      makeTrack({
+        title: e.title,
+        url: e.url || `https://www.youtube.com/watch?v=${e.id}`,
+        duration: e.duration,
+        thumbnail: e.thumbnails?.[0]?.url,
+        requestedBy,
+      })
+    );
+  if (!rest.length) throw new Error('YouTube не дал похожих треков для этой затравки.');
+  return { seed, tracks: [seed, ...rest] };
+}
+
 // Гарантирует, что у трека есть и YouTube-ссылка, и прямая ссылка на аудио.
 // Вызывается заранее (предзагрузка) и непосредственно перед воспроизведением.
 async function ensureResolved(track) {
@@ -279,4 +321,4 @@ function getStream(track) {
   return { stream: subprocess.stdout, process: subprocess, type: null };
 }
 
-module.exports = { initSources, resolveQuery, ensureResolved, getStream, formatDuration };
+module.exports = { initSources, resolveQuery, resolveRadio, ensureResolved, getStream, formatDuration };

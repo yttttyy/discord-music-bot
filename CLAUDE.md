@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Discord music bot (CommonJS, Node.js 18+) that plays audio from YouTube and Spotify links or text search, with per-guild queues. Prefix commands (default `!`), no slash commands. All code comments and user-facing bot messages are in **Russian** — keep new ones in Russian too.
+Discord music bot (CommonJS, Node.js 18+) that plays audio from YouTube and Spotify links or text search, with per-guild queues. Prefix commands (default `!`), no slash commands; every command also has Russian aliases (e.g. `!скип`, `!п`). All code comments and user-facing bot messages are in **Russian** — keep new ones in Russian too. Bot replies are minimalist embeds **without emojis** — don't add emojis to user-facing messages. Note: bare `!play`/`!п` (no args) is a pause/resume toggle, handled inside the play command.
 
 ## Commands
 

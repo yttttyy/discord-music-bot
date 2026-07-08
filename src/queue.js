@@ -169,6 +169,20 @@ class GuildQueue {
     return this.player.unpause();
   }
 
+  isPaused() {
+    return this.player.state.status === AudioPlayerStatus.Paused;
+  }
+
+  // Перемешать очередь (Фишер–Йейтс). Возвращает количество треков.
+  shuffle() {
+    for (let i = this.tracks.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [this.tracks[i], this.tracks[j]] = [this.tracks[j], this.tracks[i]];
+    }
+    this._prefetchNext(); // ближайшие треки сменились — греем новые
+    return this.tracks.length;
+  }
+
   clear() {
     const n = this.tracks.length;
     this.tracks = [];
@@ -178,7 +192,7 @@ class GuildQueue {
   _scheduleLeave() {
     this._cancelLeave();
     this._leaveTimer = setTimeout(() => {
-      this._send(infoEmbed('👋 Очередь пуста уже 10 минут, выхожу из голосового канала.'));
+      this._send(infoEmbed('Очередь пуста уже 10 минут, выхожу из голосового канала.'));
       this.destroy();
     }, 10 * 60_000);
   }

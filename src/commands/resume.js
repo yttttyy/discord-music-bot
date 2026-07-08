@@ -10,10 +10,10 @@ module.exports = {
   async execute(message) {
     const queue = getQueue(message.guild.id);
     if (!queue || !queue.current) {
-      return message.reply({ embeds: [infoEmbed('🤷 Сейчас ничего не играет.')] });
+      return message.reply({ embeds: [infoEmbed('Сейчас ничего не играет.')] });
     }
     if (!inSameVoice(message, queue)) return;
     queue.resume();
-    return message.reply({ embeds: [infoEmbed('▶️ Продолжаю.')] });
+    return message.reply({ embeds: [infoEmbed('Продолжаю.')] });
   },
 };

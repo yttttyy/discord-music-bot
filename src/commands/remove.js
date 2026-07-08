@@ -4,13 +4,13 @@ const { inSameVoice } = require('../utils');
 
 module.exports = {
   name: 'remove',
-  aliases: ['rm'],
+  aliases: ['rm', 'убрать'],
   description: 'Удалить трек из очереди по его номеру (как в queue)',
   usage: 'remove <номер>',
   async execute(message, args) {
     const queue = getQueue(message.guild.id);
     if (!queue || queue.tracks.length === 0) {
-      return message.reply({ embeds: [infoEmbed('📭 Очередь пуста.')] });
+      return message.reply({ embeds: [infoEmbed('Очередь пуста.')] });
     }
     if (!inSameVoice(message, queue)) return;
 
@@ -25,6 +25,6 @@ module.exports = {
         embeds: [errorEmbed(`В очереди нет трека под номером **${pos}** (всего: ${queue.tracks.length}).`)],
       });
     }
-    return message.reply({ embeds: [successEmbed(`🗑️ Удалил из очереди **#${pos}**: **${removed.title}**`)] });
+    return message.reply({ embeds: [successEmbed(`Удалил из очереди **#${pos}**: **${removed.title}**`)] });
   },
 };

@@ -4,13 +4,13 @@ const { inSameVoice } = require('../utils');
 
 module.exports = {
   name: 'clear',
-  aliases: ['clr'],
+  aliases: ['clr', 'клир', 'кл'],
   description: 'Очистить очередь целиком или убрать N ближайших треков (текущий не трогает)',
   usage: 'clear [N]',
   async execute(message, args) {
     const queue = getQueue(message.guild.id);
     if (!queue || queue.tracks.length === 0) {
-      return message.reply({ embeds: [infoEmbed('📭 Очередь и так пуста.')] });
+      return message.reply({ embeds: [infoEmbed('Очередь и так пуста.')] });
     }
     if (!inSameVoice(message, queue)) return;
 
@@ -21,13 +21,13 @@ module.exports = {
       }
       const removed = queue.removeFromQueue(n);
       return message.reply({
-        embeds: [successEmbed(`🗑️ Убрал **${removed}** трек(ов) из очереди. Осталось: **${queue.tracks.length}**.`)],
+        embeds: [successEmbed(`Убрал **${removed}** трек(ов) из очереди. Осталось: **${queue.tracks.length}**.`)],
       });
     }
 
     const removed = queue.clear();
     return message.reply({
-      embeds: [successEmbed(`🧹 Очередь очищена (**${removed}** трек(ов)). Текущий трек продолжает играть.`)],
+      embeds: [successEmbed(`Очередь очищена (**${removed}** трек(ов)). Текущий трек продолжает играть.`)],
     });
   },
 };

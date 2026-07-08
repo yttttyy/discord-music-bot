@@ -18,13 +18,13 @@ function successEmbed(text) {
 }
 
 function errorEmbed(text) {
-  return new EmbedBuilder().setColor(COLORS.error).setDescription(`⚠️ ${text}`);
+  return new EmbedBuilder().setColor(COLORS.error).setDescription(text);
 }
 
 function nowPlayingEmbed(track, { loop = false } = {}) {
   const embed = new EmbedBuilder()
     .setColor(COLORS.playing)
-    .setAuthor({ name: '🎶 Сейчас играет' })
+    .setAuthor({ name: 'Сейчас играет' })
     .setTitle(track.title)
     .addFields(
       { name: 'Длительность', value: `\`${formatDuration(track.duration)}\``, inline: true },
@@ -32,7 +32,7 @@ function nowPlayingEmbed(track, { loop = false } = {}) {
     );
   if (track.url) embed.setURL(track.url);
   if (track.thumbnail) embed.setThumbnail(track.thumbnail);
-  if (loop) embed.addFields({ name: 'Режим', value: '🔁 Повтор', inline: true });
+  if (loop) embed.addFields({ name: 'Режим', value: 'Повтор', inline: true });
   return embed;
 }
 
@@ -40,7 +40,7 @@ function nowPlayingEmbed(track, { loop = false } = {}) {
 function addedEmbed(track, position) {
   const embed = new EmbedBuilder()
     .setColor(COLORS.success)
-    .setAuthor({ name: '➕ Добавлено в очередь' })
+    .setAuthor({ name: 'Добавлено в очередь' })
     .setTitle(track.title)
     .addFields(
       { name: 'Длительность', value: `\`${formatDuration(track.duration)}\``, inline: true },
@@ -52,15 +52,15 @@ function addedEmbed(track, position) {
 }
 
 function addedManyEmbed(count) {
-  return successEmbed(`➕ Добавил **${count}** треков в очередь.`);
+  return successEmbed(`Добавил **${count}** треков в очередь.`);
 }
 
 function queueEmbed(queue) {
-  const embed = new EmbedBuilder().setColor(COLORS.playing).setTitle('📜 Очередь');
+  const embed = new EmbedBuilder().setColor(COLORS.playing).setTitle('Очередь');
 
   const lines = [];
   if (queue.current) {
-    const loopMark = queue.loop ? ' 🔁' : '';
+    const loopMark = queue.loop ? ' — повтор' : '';
     lines.push(`**Сейчас играет:** ${queue.current.title} \`(${formatDuration(queue.current.duration)})\`${loopMark}`);
     lines.push('');
   }
@@ -89,7 +89,7 @@ function helpEmbed(list, prefix) {
     const aliases = cmd.aliases?.length ? ` _(${cmd.aliases.join(', ')})_` : '';
     return `\`${prefix}${cmd.usage || cmd.name}\`${aliases} — ${cmd.description}`;
   });
-  return new EmbedBuilder().setColor(COLORS.info).setTitle('🎵 Команды бота').setDescription(lines.join('\n'));
+  return new EmbedBuilder().setColor(COLORS.info).setTitle('Команды бота').setDescription(lines.join('\n'));
 }
 
 module.exports = {
