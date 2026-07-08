@@ -22,14 +22,17 @@ Flow of a `!play` request:
 3. `src/sources.js` — resolves a query (YouTube video/playlist URL, Spotify URL, or free text) into track objects via `yt-dlp` (`youtube-dl-exec`), and creates audio streams.
 4. `src/queue.js` — `GuildQueue`: one voice connection + audio player + track queue per guild, kept in a module-level `Map` keyed by guild id.
 5. `src/spotify.js` — Spotify metadata only, scraped from the public `open.spotify.com/embed` endpoint (`__NEXT_DATA__` JSON). No Spotify API keys; actual audio is always found on YouTube.
+6. `src/embeds.js` — factories for all bot replies (Discord embeds, shared color palette). Every user-facing message goes through these; don't send plain-text replies.
+7. `src/utils.js` — `inSameVoice(message, queue)`: control commands (skip/stop/pause/…) require the caller to be in the bot's voice channel; the helper replies with the refusal itself.
 
 ### Key design decisions (understand before changing playback code)
 
 - **Lazy resolution**: Spotify and playlist tracks are enqueued with only metadata (`searchQuery` / `url`); the YouTube lookup and direct audio URL (`streamUrl`) are resolved right before playback via `ensureResolved()`. This avoids spawning dozens of yt-dlp processes for large playlists.
 - **Prefetch**: while a track plays, `GuildQueue._prefetchNext()` pre-resolves the next `PREFETCH_COUNT` tracks so skips are instant. Resolution promises are cached on the track object (`_resolvePromise`) to dedupe concurrent resolves.
-- **Streaming fast path**: when `track.streamUrl` (direct googlevideo audio URL) is known, ffmpeg is spawned directly on it, encoding to Ogg/Opus with an `afade` fade-in — no second yt-dlp/Deno invocation. Fallback path pipes through `ytdlp.exec`. The child process is tracked as `currentProcess` and must be SIGKILLed before starting the next track (see `skip()`) to avoid leftover audio frames.
+- **Streaming fast path**: when `track.streamUrl` (direct googlevideo audio URL) is known, ffmpeg is spawned directly on it, encoding to Ogg/Opus with `afade` fade-in at the start and fade-out at the end (fade-out only when `track.duration` is known and long enough — see `audioFilters()`) — no second yt-dlp/Deno invocation and no inlineVolume re-encoding. Fallback path pipes through `ytdlp.exec`. The child process is tracked as `currentProcess` and must be SIGKILLed before starting the next track (see `skip()`) to avoid leftover audio frames.
 - **Spotify search quality**: Spotify-sourced tracks set `preferTopic: true`, so `searchYouTube` fetches 8 candidates and prefers "- Topic" channels (official clean audio), filtering out covers/karaoke/remixes via a junk regex.
 - **Queue lifecycle**: empty queue starts a leave timer (`_scheduleLeave`); `createQueue` wraps `destroy()` to also remove the queue from the guild Map — always go through `destroy()`, never tear down the connection directly.
+- **Single queue-advance point**: only the `Idle` handler pulls the next track. The `error` handler and `skip()` just set `_advanceWithoutLoop` (suppresses the loop re-queue once) and force `player.stop(true)`; advancing from anywhere else risks double-shifting the queue.
 
 ## Configuration
 

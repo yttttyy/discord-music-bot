@@ -4,6 +4,9 @@
   "description": "Discord music bot with YouTube/Spotify playback and queue",
   "main": "src/index.js",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node src/index.js"
   },

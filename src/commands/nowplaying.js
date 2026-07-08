@@ -1,5 +1,5 @@
 const { getQueue } = require('../queue');
-const { formatDuration } = require('../sources');
+const { infoEmbed, nowPlayingEmbed } = require('../embeds');
 
 module.exports = {
   name: 'nowplaying',
@@ -9,13 +9,8 @@ module.exports = {
   async execute(message) {
     const queue = getQueue(message.guild.id);
     if (!queue || !queue.current) {
-      return message.reply('🤷 Сейчас ничего не играет.');
+      return message.reply({ embeds: [infoEmbed('🤷 Сейчас ничего не играет.')] });
     }
-    const t = queue.current;
-    return message.reply(
-      `🎶 **${t.title}** \`(${formatDuration(t.duration)})\`\n` +
-        `🔗 ${t.url}\n` +
-        `🙋 Заказал: ${t.requestedBy}`
-    );
+    return message.reply({ embeds: [nowPlayingEmbed(queue.current, { loop: queue.loop })] });
   },
 };

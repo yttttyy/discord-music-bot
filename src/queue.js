@@ -7,6 +7,7 @@ const {
   entersState,
 } = require('@discordjs/voice');
 const { getStream, ensureResolved } = require('./sources');
+const { nowPlayingEmbed, infoEmbed, errorEmbed } = require('./embeds');
 
 // Очередь и плеер для одного сервера (гильдии).
 class GuildQueue {
@@ -18,6 +19,7 @@ class GuildQueue {
     this.current = null;
     this.currentProcess = null; // дочерний процесс yt-dlp текущего трека
     this.loop = false; // повтор текущего трека
+    this._advanceWithoutLoop = false; // разово подавить повтор (skip / ошибка трека)
     this.destroyed = false;
 
     this.connection = joinVoiceChannel({
@@ -34,20 +36,25 @@ class GuildQueue {
 
   _wireEvents() {
     // Когда трек закончился — играем следующий.
+    // Это ЕДИНСТВЕННАЯ точка продвижения очереди по событиям плеера.
     this.player.on(AudioPlayerStatus.Idle, () => {
       if (this.destroyed) return;
-      if (this.loop && this.current) {
+      if (this.loop && this.current && !this._advanceWithoutLoop) {
         this.tracks.unshift(this.current);
       }
+      this._advanceWithoutLoop = false;
       this.current = null;
       this._processQueue();
     });
 
     this.player.on('error', (error) => {
       console.error(`Ошибка плеера [${this.guildId}]:`, error.message);
-      this.textChannel?.send('⚠️ Ошибка при воспроизведении трека, пропускаю.').catch(() => {});
-      this.current = null;
-      this._processQueue();
+      this._send(errorEmbed('Ошибка при воспроизведении трека, пропускаю.'));
+      // Очередь не трогаем: после error плеер уходит в Idle, и продвижение
+      // случится там ровно один раз (иначе error+Idle снимали бы два трека).
+      // Повтор подавляем, чтобы битый трек не крутился бесконечно.
+      this._advanceWithoutLoop = true;
+      this.player.stop(true);
     });
 
     // Авто-реконнект при разрыве голосового соединения.
@@ -98,11 +105,11 @@ class GuildQueue {
       this.currentResource = resource;
       this.player.play(resource);
       await entersState(this.player, AudioPlayerStatus.Playing, 15_000);
-      this.textChannel?.send(`🎶 Сейчас играет: **${next.title}**`).catch(() => {});
+      this._send(nowPlayingEmbed(next, { loop: this.loop }));
       this._prefetchNext(); // пока играет текущий — заранее резолвим следующий
     } catch (err) {
       console.error('Не удалось запустить трек:', err.message);
-      this.textChannel?.send(`⚠️ Не удалось воспроизвести **${next.title}**, пропускаю.`).catch(() => {});
+      this._send(errorEmbed(`Не удалось воспроизвести **${next.title}**, пропускаю.`));
       this.current = null;
       this._processQueue();
     }
@@ -135,6 +142,8 @@ class GuildQueue {
     // буферизованные кадры могут «вылезти» микрозвуком после паузы.
     this._killProcess();
     this.currentResource = null;
+    // skip должен уводить к СЛЕДУЮЩЕМУ треку даже при включённом loop.
+    this._advanceWithoutLoop = true;
     // stop() переведёт плеер в Idle -> сработает _processQueue (трек уже прогрет).
     // Резкого щелчка нет: следующий трек плавно появляется через ffmpeg afade.
     this.player.stop(true);
@@ -169,9 +178,13 @@ class GuildQueue {
   _scheduleLeave() {
     this._cancelLeave();
     this._leaveTimer = setTimeout(() => {
-      this.textChannel?.send('👋 Очередь пуста уже 10 минут, выхожу из голосового канала.').catch(() => {});
+      this._send(infoEmbed('👋 Очередь пуста уже 10 минут, выхожу из голосового канала.'));
       this.destroy();
     }, 10 * 60_000);
+  }
+
+  _send(embed) {
+    this.textChannel?.send({ embeds: [embed] }).catch(() => {});
   }
 
   _cancelLeave() {

@@ -13,6 +13,21 @@ function cookieArgs() {
 
 // Длительность плавного появления звука в начале трека (сек).
 const FADE_IN_SEC = 1;
+// Длительность плавного затухания в конце трека (сек).
+const FADE_OUT_SEC = 2;
+// Треки короче этого порога не затухаем (джинглы, эффекты).
+const MIN_FADE_OUT_DURATION = 10;
+
+// Цепочка ffmpeg-фильтров: fade-in в начале всегда, fade-out в конце —
+// только когда длительность известна (для LIVE её нет).
+function audioFilters(track) {
+  const filters = [`afade=t=in:st=0:d=${FADE_IN_SEC}`];
+  const d = Number(track.duration);
+  if (Number.isFinite(d) && d > MIN_FADE_OUT_DURATION) {
+    filters.push(`afade=t=out:st=${d - FADE_OUT_SEC}:d=${FADE_OUT_SEC}`);
+  }
+  return filters.join(',');
+}
 
 // Общие флаги yt-dlp.
 const COMMON = {
@@ -146,9 +161,6 @@ async function resolveQuery(query, requestedBy) {
   }
 
   if (type === 'spotify') {
-    if (!config.spotifyEnabled) {
-      throw new Error('Spotify не настроен. Добавь SPOTIFY_CLIENT_ID и SPOTIFY_CLIENT_SECRET в .env.');
-    }
     const metas = await resolveSpotify(query);
     // Ленивый резолв: YouTube ищем не сейчас, а перед самим воспроизведением
     // (ensureResolved) — иначе большой плейлист запускал бы десятки yt-dlp разом.
@@ -205,8 +217,8 @@ function getStream(track) {
         '-reconnect_delay_max', '5',
         '-i', track.streamUrl,
         '-vn',
-        // гладкий fade-in делает сам ffmpeg (посэмплово), без ступенек
-        '-af', `afade=t=in:st=0:d=${FADE_IN_SEC}`,
+        // гладкие fade-in/fade-out делает сам ffmpeg (посэмплово), без ступенек
+        '-af', audioFilters(track),
         '-ar', '48000',
         '-ac', '2',
         '-c:a', 'libopus',

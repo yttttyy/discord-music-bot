@@ -15,7 +15,4 @@ if (!config.token) {
   process.exit(1);
 }
 
-// Spotify работает через публичный embed — ключи и Premium не нужны.
-config.spotifyEnabled = true;
-
 module.exports = config;

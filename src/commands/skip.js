@@ -1,4 +1,6 @@
 const { getQueue } = require('../queue');
+const { infoEmbed } = require('../embeds');
+const { inSameVoice } = require('../utils');
 
 module.exports = {
   name: 'skip',
@@ -8,10 +10,11 @@ module.exports = {
   async execute(message) {
     const queue = getQueue(message.guild.id);
     if (!queue || !queue.current) {
-      return message.reply('🤷 Сейчас ничего не играет.');
+      return message.reply({ embeds: [infoEmbed('🤷 Сейчас ничего не играет.')] });
     }
+    if (!inSameVoice(message, queue)) return;
     const title = queue.current.title;
     queue.skip();
-    return message.reply(`⏭️ Пропущено: **${title}**`);
+    return message.reply({ embeds: [infoEmbed(`⏭️ Пропущено: **${title}**`)] });
   },
 };
