@@ -29,14 +29,27 @@ function audioFilters(track) {
   return filters.join(',');
 }
 
-// Общие флаги yt-dlp.
+// Общие флаги yt-dlp. ВАЖНО: без куки — googlevideo-ссылка, добытая с куками,
+// привязывается к сессии браузера, и ffmpeg на неё получает 403 Forbidden.
 const COMMON = {
   noWarnings: true,
   noCheckCertificates: true,
   preferFreeFormats: true,
   noPlaylist: true,
-  ...cookieArgs(),
 };
+const COOKIES = cookieArgs();
+
+// Извлечение метаданных: сперва без куки (быстрый путь через прямую ссылку),
+// при неудаче (18+ / «подтвердите возраст») — повтор с куками. В этом случае
+// прямую ссылку использовать нельзя (403 для ffmpeg), стримим через yt-dlp.
+async function extractInfo(url, flags = {}) {
+  try {
+    return { info: await ytdlp(url, { ...COMMON, ...flags }), viaCookies: false };
+  } catch (e) {
+    if (!Object.keys(COOKIES).length) throw e;
+    return { info: await ytdlp(url, { ...COMMON, ...COOKIES, ...flags }), viaCookies: true };
+  }
+}
 
 async function initSources() {
   console.log('✅ Источники готовы: YouTube + Spotify (без ключей, через embed).');
@@ -47,8 +60,10 @@ async function initSources() {
 
 // track.streamUrl — прямая ссылка на аудио (googlevideo) с уже решённой
 // подписью; благодаря ей воспроизведение не запускает yt-dlp/Deno повторно.
-function makeTrack({ title, url, duration, thumbnail, requestedBy, searchQuery = null, streamUrl = null, preferTopic = false }) {
-  return { title, url, duration, thumbnail, requestedBy, searchQuery, streamUrl, preferTopic };
+// track.streamHeaders — HTTP-заголовки, с которыми yt-dlp добыл эту ссылку:
+// без них googlevideo отвечает 403 Forbidden на запрос ffmpeg.
+function makeTrack({ title, url, duration, thumbnail, requestedBy, searchQuery = null, streamUrl = null, streamHeaders = null, preferTopic = false }) {
+  return { title, url, duration, thumbnail, requestedBy, searchQuery, streamUrl, streamHeaders, preferTopic };
 }
 
 function formatDuration(seconds) {
@@ -69,27 +84,30 @@ function detectType(query) {
   return 'search';
 }
 
-// Выбирает прямую ссылку на лучший аудио-формат из ответа yt-dlp.
-function pickAudioUrl(info) {
+// Выбирает лучший аудио-формат из ответа yt-dlp: прямую ссылку + заголовки.
+function pickAudio(info) {
   if (!info) return null;
   const fmts = (info.formats || []).filter(
     (f) => f.url && f.acodec && f.acodec !== 'none' && (f.vcodec === 'none' || !f.vcodec)
   );
   if (!fmts.length) return null;
   fmts.sort((a, b) => (b.abr || 0) - (a.abr || 0));
-  return fmts[0].url;
+  const f = fmts[0];
+  return { url: f.url, headers: f.http_headers || info.http_headers || null };
 }
 
 // Извлекает один YouTube-URL в полный трек (с прямой ссылкой на аудио).
 async function fullTrack(url, requestedBy) {
-  const info = await ytdlp(url, { ...COMMON, dumpSingleJson: true });
+  const { info, viaCookies } = await extractInfo(url, { dumpSingleJson: true });
+  const audio = viaCookies ? null : pickAudio(info);
   return makeTrack({
     title: info.title,
     url: info.webpage_url || url,
     duration: info.duration,
     thumbnail: info.thumbnail,
     requestedBy,
-    streamUrl: pickAudioUrl(info),
+    streamUrl: audio?.url,
+    streamHeaders: audio?.headers,
   });
 }
 
@@ -113,16 +131,18 @@ async function searchYouTube(query, requestedBy, preferTopic = false) {
     return fullTrack(chosen.url || `https://www.youtube.com/watch?v=${chosen.id}`, requestedBy);
   }
 
-  const info = await ytdlp(`ytsearch1:${query}`, { ...COMMON, dumpSingleJson: true });
+  const { info, viaCookies } = await extractInfo(`ytsearch1:${query}`, { dumpSingleJson: true });
   const e = info.entries ? info.entries[0] : info;
   if (!e) return null;
+  const audio = viaCookies ? null : pickAudio(e);
   return makeTrack({
     title: e.title,
     url: e.webpage_url || e.url,
     duration: e.duration,
     thumbnail: e.thumbnail,
     requestedBy,
-    streamUrl: pickAudioUrl(e),
+    streamUrl: audio?.url,
+    streamHeaders: audio?.headers,
   });
 }
 
@@ -131,7 +151,8 @@ async function resolveQuery(query, requestedBy) {
   const type = detectType(query);
 
   if (type === 'yt_video') {
-    const info = await ytdlp(query, { ...COMMON, dumpSingleJson: true });
+    const { info, viaCookies } = await extractInfo(query, { dumpSingleJson: true });
+    const audio = viaCookies ? null : pickAudio(info);
     return [
       makeTrack({
         title: info.title,
@@ -139,14 +160,15 @@ async function resolveQuery(query, requestedBy) {
         duration: info.duration,
         thumbnail: info.thumbnail,
         requestedBy,
-        streamUrl: pickAudioUrl(info),
+        streamUrl: audio?.url,
+        streamHeaders: audio?.headers,
       }),
     ];
   }
 
   if (type === 'yt_playlist') {
     // flatPlaylist быстрый, но без форматов — прямую ссылку добудем позже (ensureResolved).
-    const info = await ytdlp(query, { ...COMMON, noPlaylist: false, dumpSingleJson: true, flatPlaylist: true });
+    const { info } = await extractInfo(query, { noPlaylist: false, dumpSingleJson: true, flatPlaylist: true });
     return (info.entries || [])
       .filter((e) => e && e.id)
       .map((e) =>
@@ -188,8 +210,10 @@ async function ensureResolved(track) {
 
   // YouTube известен, но нет прямой ссылки (трек из плейлиста) — извлекаем форматы.
   if (track.url && !track.streamUrl) {
-    const info = await ytdlp(track.url, { ...COMMON, dumpSingleJson: true });
-    track.streamUrl = pickAudioUrl(info);
+    const { info, viaCookies } = await extractInfo(track.url, { dumpSingleJson: true });
+    const audio = viaCookies ? null : pickAudio(info);
+    track.streamUrl = audio?.url;
+    track.streamHeaders = audio?.headers;
     if (!track.duration) track.duration = info.duration;
     return track;
   }
@@ -200,9 +224,22 @@ async function ensureResolved(track) {
   if (!found) throw new Error(`На YouTube не нашлось: ${track.title}`);
   track.url = found.url;
   track.streamUrl = found.streamUrl;
+  track.streamHeaders = found.streamHeaders;
   if (!track.duration) track.duration = found.duration;
   if (!track.thumbnail) track.thumbnail = found.thumbnail;
   return track;
+}
+
+// Собирает HTTP-аргументы ffmpeg из заголовков yt-dlp. Без этих заголовков
+// (в первую очередь User-Agent) googlevideo отвечает 403 Forbidden.
+function ffmpegHeaderArgs(track) {
+  const headers = track.streamHeaders || {};
+  const args = ['-user_agent', headers['User-Agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'];
+  const rest = Object.entries(headers).filter(([k]) => k.toLowerCase() !== 'user-agent');
+  if (rest.length) {
+    args.push('-headers', rest.map(([k, v]) => `${k}: ${v}`).join('\r\n') + '\r\n');
+  }
+  return args;
 }
 
 // Создаёт аудиопоток. Быстрый путь: ffmpeg напрямую читает прямую ссылку
@@ -212,6 +249,7 @@ function getStream(track) {
     const ff = spawn(
       'ffmpeg',
       [
+        ...ffmpegHeaderArgs(track),
         '-reconnect', '1',
         '-reconnect_streamed', '1',
         '-reconnect_delay_max', '5',
@@ -231,10 +269,11 @@ function getStream(track) {
     return { stream: ff.stdout, process: ff, type: StreamType.OggOpus };
   }
 
-  // запасной вариант (если прямой ссылки нет)
+  // Запасной вариант (если прямой ссылки нет, в т.ч. 18+): yt-dlp сам качает
+  // с куками — для его собственного HTTP-клиента сессионная привязка не помеха.
   const subprocess = ytdlp.exec(
     track.url,
-    { ...COMMON, output: '-', quiet: true, format: 'bestaudio[ext=webm]/bestaudio/best', limitRate: '5M' },
+    { ...COMMON, ...COOKIES, output: '-', quiet: true, format: 'bestaudio[ext=webm]/bestaudio/best', limitRate: '5M' },
     { stdio: ['ignore', 'pipe', 'ignore'] }
   );
   return { stream: subprocess.stdout, process: subprocess, type: null };
