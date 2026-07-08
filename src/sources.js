@@ -1,0 +1,231 @@
+const { spawn } = require('child_process');
+const { StreamType } = require('@discordjs/voice');
+const ytdlp = require('youtube-dl-exec');
+const config = require('./config');
+const { resolveSpotify } = require('./spotify');
+
+// Куки для YouTube (обход возрастных ограничений). Приоритет у файла.
+function cookieArgs() {
+  if (config.cookies.file) return { cookies: config.cookies.file };
+  if (config.cookies.browser) return { cookiesFromBrowser: config.cookies.browser };
+  return {};
+}
+
+// Длительность плавного появления звука в начале трека (сек).
+const FADE_IN_SEC = 1;
+
+// Общие флаги yt-dlp.
+const COMMON = {
+  noWarnings: true,
+  noCheckCertificates: true,
+  preferFreeFormats: true,
+  noPlaylist: true,
+  ...cookieArgs(),
+};
+
+async function initSources() {
+  console.log('✅ Источники готовы: YouTube + Spotify (без ключей, через embed).');
+  if (config.cookies.file) console.log(`🍪 YouTube-куки из файла: ${config.cookies.file}`);
+  else if (config.cookies.browser) console.log(`🍪 YouTube-куки из браузера: ${config.cookies.browser}`);
+  else console.log('ℹ️  Куки YouTube не заданы — видео 18+ играть не будут (см. .env.example).');
+}
+
+// track.streamUrl — прямая ссылка на аудио (googlevideo) с уже решённой
+// подписью; благодаря ей воспроизведение не запускает yt-dlp/Deno повторно.
+function makeTrack({ title, url, duration, thumbnail, requestedBy, searchQuery = null, streamUrl = null, preferTopic = false }) {
+  return { title, url, duration, thumbnail, requestedBy, searchQuery, streamUrl, preferTopic };
+}
+
+function formatDuration(seconds) {
+  if (!seconds || Number.isNaN(seconds)) return 'LIVE';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+function detectType(query) {
+  if (/open\.spotify\.com|spotify:/i.test(query)) return 'spotify';
+  if (/(?:youtube\.com|youtu\.be)/i.test(query)) {
+    if (/[?&]list=/.test(query) && !/[?&]list=RD/.test(query)) return 'yt_playlist';
+    return 'yt_video';
+  }
+  return 'search';
+}
+
+// Выбирает прямую ссылку на лучший аудио-формат из ответа yt-dlp.
+function pickAudioUrl(info) {
+  if (!info) return null;
+  const fmts = (info.formats || []).filter(
+    (f) => f.url && f.acodec && f.acodec !== 'none' && (f.vcodec === 'none' || !f.vcodec)
+  );
+  if (!fmts.length) return null;
+  fmts.sort((a, b) => (b.abr || 0) - (a.abr || 0));
+  return fmts[0].url;
+}
+
+// Извлекает один YouTube-URL в полный трек (с прямой ссылкой на аудио).
+async function fullTrack(url, requestedBy) {
+  const info = await ytdlp(url, { ...COMMON, dumpSingleJson: true });
+  return makeTrack({
+    title: info.title,
+    url: info.webpage_url || url,
+    duration: info.duration,
+    thumbnail: info.thumbnail,
+    requestedBy,
+    streamUrl: pickAudioUrl(info),
+  });
+}
+
+// Поиск трека на YouTube через yt-dlp.
+// preferTopic=true: берём 5 кандидатов и предпочитаем канал «… - Topic»
+// (официальное чистое аудио), чтобы не попасть на клип с лишними вставками.
+async function searchYouTube(query, requestedBy, preferTopic = false) {
+  if (preferTopic) {
+    const res = await ytdlp(`ytsearch8:${query}`, { ...COMMON, dumpSingleJson: true, flatPlaylist: true });
+    const entries = (res.entries || []).filter((e) => e && e.id);
+    if (!entries.length) return null;
+
+    const isTopic = (e) => /-\s*topic$/i.test((e.channel || e.uploader || '').trim());
+    // явный мусор, который не должен подменять оригинал
+    const junk = /\b(karaoke|lyrics?|cover|live|remix|mashup|nightcore|instrumental|sped\s*up|slowed|8d|reverb)\b|кавер|караоке|клип|минус/i;
+
+    const chosen =
+      entries.find(isTopic) || // 1) официальное «- Topic» аудио
+      entries.find((e) => !junk.test(e.title || '')) || // 2) первый «чистый»
+      entries[0]; // 3) хоть что-то
+    return fullTrack(chosen.url || `https://www.youtube.com/watch?v=${chosen.id}`, requestedBy);
+  }
+
+  const info = await ytdlp(`ytsearch1:${query}`, { ...COMMON, dumpSingleJson: true });
+  const e = info.entries ? info.entries[0] : info;
+  if (!e) return null;
+  return makeTrack({
+    title: e.title,
+    url: e.webpage_url || e.url,
+    duration: e.duration,
+    thumbnail: e.thumbnail,
+    requestedBy,
+    streamUrl: pickAudioUrl(e),
+  });
+}
+
+// Главный резолвер: ссылка/текст -> массив треков.
+async function resolveQuery(query, requestedBy) {
+  const type = detectType(query);
+
+  if (type === 'yt_video') {
+    const info = await ytdlp(query, { ...COMMON, dumpSingleJson: true });
+    return [
+      makeTrack({
+        title: info.title,
+        url: info.webpage_url || query,
+        duration: info.duration,
+        thumbnail: info.thumbnail,
+        requestedBy,
+        streamUrl: pickAudioUrl(info),
+      }),
+    ];
+  }
+
+  if (type === 'yt_playlist') {
+    // flatPlaylist быстрый, но без форматов — прямую ссылку добудем позже (ensureResolved).
+    const info = await ytdlp(query, { ...COMMON, noPlaylist: false, dumpSingleJson: true, flatPlaylist: true });
+    return (info.entries || [])
+      .filter((e) => e && e.id)
+      .map((e) =>
+        makeTrack({
+          title: e.title,
+          url: e.url || `https://www.youtube.com/watch?v=${e.id}`,
+          duration: e.duration,
+          thumbnail: e.thumbnails?.[0]?.url,
+          requestedBy,
+        })
+      );
+  }
+
+  if (type === 'spotify') {
+    if (!config.spotifyEnabled) {
+      throw new Error('Spotify не настроен. Добавь SPOTIFY_CLIENT_ID и SPOTIFY_CLIENT_SECRET в .env.');
+    }
+    const metas = await resolveSpotify(query);
+    // Ленивый резолв: YouTube ищем не сейчас, а перед самим воспроизведением
+    // (ensureResolved) — иначе большой плейлист запускал бы десятки yt-dlp разом.
+    return metas.map((m) =>
+      makeTrack({
+        title: m.title,
+        url: null,
+        duration: m.duration,
+        thumbnail: m.thumbnail,
+        requestedBy,
+        searchQuery: m.searchQuery,
+        preferTopic: true, // для Spotify ищем чистое «- Topic» аудио, а не клип
+      })
+    );
+  }
+
+  const t = await searchYouTube(query, requestedBy);
+  return t ? [t] : [];
+}
+
+// Гарантирует, что у трека есть и YouTube-ссылка, и прямая ссылка на аудио.
+// Вызывается заранее (предзагрузка) и непосредственно перед воспроизведением.
+async function ensureResolved(track) {
+  if (track.url && track.streamUrl) return track;
+
+  // YouTube известен, но нет прямой ссылки (трек из плейлиста) — извлекаем форматы.
+  if (track.url && !track.streamUrl) {
+    const info = await ytdlp(track.url, { ...COMMON, dumpSingleJson: true });
+    track.streamUrl = pickAudioUrl(info);
+    if (!track.duration) track.duration = info.duration;
+    return track;
+  }
+
+  // Трек из Spotify/поиска — ищем на YouTube (сразу получаем и прямую ссылку).
+  if (!track.searchQuery) throw new Error('Нечего искать для этого трека.');
+  const found = await searchYouTube(track.searchQuery, track.requestedBy, track.preferTopic);
+  if (!found) throw new Error(`На YouTube не нашлось: ${track.title}`);
+  track.url = found.url;
+  track.streamUrl = found.streamUrl;
+  if (!track.duration) track.duration = found.duration;
+  if (!track.thumbnail) track.thumbnail = found.thumbnail;
+  return track;
+}
+
+// Создаёт аудиопоток. Быстрый путь: ffmpeg напрямую читает прямую ссылку
+// (без повторного yt-dlp/Deno). Запасной путь: старый pipe через yt-dlp.
+function getStream(track) {
+  if (track.streamUrl) {
+    const ff = spawn(
+      'ffmpeg',
+      [
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
+        '-i', track.streamUrl,
+        '-vn',
+        // гладкий fade-in делает сам ffmpeg (посэмплово), без ступенек
+        '-af', `afade=t=in:st=0:d=${FADE_IN_SEC}`,
+        '-ar', '48000',
+        '-ac', '2',
+        '-c:a', 'libopus',
+        '-b:a', '128k',
+        '-f', 'ogg',
+        'pipe:1',
+      ],
+      { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }
+    );
+    return { stream: ff.stdout, process: ff, type: StreamType.OggOpus };
+  }
+
+  // запасной вариант (если прямой ссылки нет)
+  const subprocess = ytdlp.exec(
+    track.url,
+    { ...COMMON, output: '-', quiet: true, format: 'bestaudio[ext=webm]/bestaudio/best', limitRate: '5M' },
+    { stdio: ['ignore', 'pipe', 'ignore'] }
+  );
+  return { stream: subprocess.stdout, process: subprocess, type: null };
+}
+
+module.exports = { initSources, resolveQuery, ensureResolved, getStream, formatDuration };
