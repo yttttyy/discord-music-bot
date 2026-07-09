@@ -4,7 +4,8 @@ const { inSameVoice } = require('../utils');
 
 module.exports = {
   name: 'skip',
-  aliases: ['s', 'next', 'скип', 'с'],
+  // 'c' — латинская: её часто набирают вместо кириллической «с».
+  aliases: ['s', 'next', 'c', 'скип', 'с'],
   description: 'Пропустить текущий трек',
   usage: 'skip',
   async execute(message) {

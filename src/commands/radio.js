@@ -6,11 +6,18 @@ const { inSameVoice } = require('../utils');
 module.exports = {
   name: 'radio',
   aliases: ['радио', 'р'],
-  description: 'Радио: заполнить очередь похожими треками (YouTube Mix) по ссылке или названию',
+  description: 'Бесконечное радио: очередь сама пополняется похожими треками; radio без аргументов — выключить',
   usage: 'radio <ссылка или название>',
   async execute(message, args) {
     const query = args.join(' ').trim();
     if (!query) {
+      // Без аргументов — выключатель активного радио.
+      const queue = getQueue(message.guild.id);
+      if (queue?.radio) {
+        if (!inSameVoice(message, queue)) return;
+        queue.radio = false;
+        return message.reply({ embeds: [infoEmbed('Радио выключено — очередь доиграет и остановится.')] });
+      }
       return message.reply({
         embeds: [errorEmbed('Укажи ссылку или название трека-затравки. Пример: `radio never gonna give you up`')],
       });
@@ -44,8 +51,13 @@ module.exports = {
     }
 
     queue.enqueue(tracks);
+    queue.enableRadio(tracks);
     await loading.edit({
-      embeds: [successEmbed(`Радио: добавил **${tracks.length}** треков по мотивам **${seed.title}**.`)],
+      embeds: [
+        successEmbed(
+          `Радио: **${tracks.length}** треков по мотивам **${seed.title}**. Очередь будет пополняться сама; \`radio\` без аргументов — выключить.`
+        ),
+      ],
     });
 
     await queue.start();

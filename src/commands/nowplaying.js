@@ -11,6 +11,8 @@ module.exports = {
     if (!queue || !queue.current) {
       return message.reply({ embeds: [infoEmbed('Сейчас ничего не играет.')] });
     }
-    return message.reply({ embeds: [nowPlayingEmbed(queue.current, { loop: queue.loop })] });
+    return message.reply({
+      embeds: [nowPlayingEmbed(queue.current, { loop: queue.loop, elapsed: queue.elapsedSeconds() })],
+    });
   },
 };

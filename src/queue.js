@@ -6,8 +6,10 @@ const {
   VoiceConnectionStatus,
   entersState,
 } = require('@discordjs/voice');
-const { getStream, ensureResolved } = require('./sources');
-const { nowPlayingEmbed, infoEmbed, errorEmbed } = require('./embeds');
+const { ActivityType } = require('discord.js');
+const { getStream, ensureResolved, fetchMix, extractVideoId } = require('./sources');
+const { nowPlayingEmbed, infoEmbed, errorEmbed, controlButtons } = require('./embeds');
+const { getSetting } = require('./settings');
 
 // Очередь и плеер для одного сервера (гильдии).
 class GuildQueue {
@@ -20,6 +22,11 @@ class GuildQueue {
     this.currentProcess = null; // дочерний процесс yt-dlp текущего трека
     this.loop = false; // повтор текущего трека
     this._advanceWithoutLoop = false; // разово подавить повтор (skip / ошибка трека)
+    this.radio = false; // бесконечное радио: доливать похожие треки
+    this._radioSeen = new Set(); // videoId всего, что уже было в очереди
+    this._radioRefilling = false;
+    this._lastVideoId = null; // затравка для следующего долива радио
+    this._autoPaused = false; // пауза из-за пустого канала (не ручная)
     this.destroyed = false;
 
     this.connection = joinVoiceChannel({
@@ -85,7 +92,8 @@ class GuildQueue {
     if (this.destroyed) return;
     const next = this.tracks.shift();
     if (!next) {
-      // Очередь пуста — даём 60 сек, затем выходим из канала.
+      // Очередь пуста — таймер на выход из канала; статус бота сбрасываем.
+      this._setActivity(null);
       this._scheduleLeave();
       return;
     }
@@ -105,8 +113,19 @@ class GuildQueue {
       this.currentResource = resource;
       this.player.play(resource);
       await entersState(this.player, AudioPlayerStatus.Playing, 15_000);
-      this._send(nowPlayingEmbed(next, { loop: this.loop }));
+
+      const vid = next.videoId || extractVideoId(next.url);
+      if (vid) {
+        this._lastVideoId = vid; // радио доливает микс от последнего сыгранного
+        this._radioSeen.add(vid);
+      }
+      this._setActivity(next.title);
+
+      const buttons = getSetting(this.guildId, 'buttons', true);
+      this._send(nowPlayingEmbed(next, { loop: this.loop }), buttons ? [controlButtons(false)] : undefined);
+
       this._prefetchNext(); // пока играет текущий — заранее резолвим следующий
+      if (this.radio && this.tracks.length <= GuildQueue.RADIO_REFILL_AT) this._refillRadio();
     } catch (err) {
       console.error('Не удалось запустить трек:', err.message);
       this._send(errorEmbed(`Не удалось воспроизвести **${next.title}**, пропускаю.`));
@@ -136,6 +155,34 @@ class GuildQueue {
     }
   }
 
+  // Включить радио: помечаем уже заочередённые треки, чтобы долив их не дублировал.
+  enableRadio(seedTracks = []) {
+    this.radio = true;
+    for (const t of seedTracks) if (t.videoId) this._radioSeen.add(t.videoId);
+  }
+
+  // Долив радио: когда очередь худеет, в фоне тянем ещё похожих треков
+  // (Mix от последнего сыгранного, без повторов благодаря _radioSeen).
+  async _refillRadio() {
+    if (this._radioRefilling || this.destroyed || !this._lastVideoId) return;
+    this._radioRefilling = true;
+    try {
+      const added = await fetchMix(this._lastVideoId, 'радио', { exclude: this._radioSeen });
+      if (this.destroyed || !this.radio) return;
+      for (const t of added) if (t.videoId) this._radioSeen.add(t.videoId);
+      if (added.length) {
+        this.enqueue(added);
+        this._send(infoEmbed(`Радио: добавил ещё ${added.length} треков.`));
+        // Если очередь успела кончиться, пока тянули микс, — запускаем сами.
+        if (!this.current) await this._processQueue();
+      }
+    } catch (e) {
+      console.error(`Радио [${this.guildId}]: не удалось долить треки:`, e.message);
+    } finally {
+      this._radioRefilling = false;
+    }
+  }
+
   skip() {
     if (!this.current) return;
     // Глушим старый ffmpeg ДО старта следующего, иначе его остаточные
@@ -161,6 +208,18 @@ class GuildQueue {
     return this.tracks.splice(pos - 1, 1)[0];
   }
 
+  // Переставить трек с позиции from на позицию to (1-based).
+  // Возвращает переставленный трек или null при неверных границах.
+  moveTrack(from, to) {
+    const len = this.tracks.length;
+    if (!Number.isInteger(from) || !Number.isInteger(to)) return null;
+    if (from < 1 || from > len || to < 1 || to > len) return null;
+    const [t] = this.tracks.splice(from - 1, 1);
+    this.tracks.splice(to - 1, 0, t);
+    this._prefetchNext(); // ближайшие треки могли смениться
+    return t;
+  }
+
   pause() {
     return this.player.pause();
   }
@@ -171,6 +230,56 @@ class GuildQueue {
 
   isPaused() {
     return this.player.state.status === AudioPlayerStatus.Paused;
+  }
+
+  // Сколько секунд трека уже проиграно (пауза не тикает).
+  elapsedSeconds() {
+    return this.currentResource ? Math.floor(this.currentResource.playbackDuration / 1000) : 0;
+  }
+
+  // Статус бота в Discord. Он глобальный: при игре в нескольких гильдиях
+  // показывается последний запущенный трек — осознанное упрощение.
+  _setActivity(title) {
+    try {
+      const user = this.textChannel?.client?.user;
+      if (!user) return;
+      if (title) user.setActivity(title, { type: ActivityType.Listening });
+      else user.setPresence({ activities: [] });
+    } catch {}
+  }
+
+  // --- Пустой голосовой канал: пауза сразу, выход через 5 минут. ---
+
+  onChannelEmpty() {
+    if (this.destroyed) return;
+    this._cancelEmptyTimer();
+    if (this.current && !this.isPaused()) {
+      this._autoPaused = true; // ручную паузу пользователя не трогаем при возврате
+      this.pause();
+      this._send(infoEmbed('В канале никого нет — пауза.'));
+    }
+    this._emptyTimer = setTimeout(() => {
+      this._send(infoEmbed('В канале никого нет уже 5 минут, выхожу.'));
+      this.destroy();
+    }, GuildQueue.EMPTY_CHANNEL_LEAVE_MS);
+  }
+
+  onChannelActive() {
+    this._cancelEmptyTimer();
+    if (this._autoPaused) {
+      this._autoPaused = false;
+      if (this.current) {
+        this.resume();
+        this._send(infoEmbed('Продолжаю.'));
+      }
+    }
+  }
+
+  _cancelEmptyTimer() {
+    if (this._emptyTimer) {
+      clearTimeout(this._emptyTimer);
+      this._emptyTimer = null;
+    }
   }
 
   // Перемешать очередь (Фишер–Йейтс). Возвращает количество треков.
@@ -197,8 +306,10 @@ class GuildQueue {
     }, 10 * 60_000);
   }
 
-  _send(embed) {
-    this.textChannel?.send({ embeds: [embed] }).catch(() => {});
+  _send(embed, components) {
+    const payload = { embeds: [embed] };
+    if (components?.length) payload.components = components;
+    this.textChannel?.send(payload).catch(() => {});
   }
 
   _cancelLeave() {
@@ -221,6 +332,8 @@ class GuildQueue {
     if (this.destroyed) return;
     this.destroyed = true;
     this._cancelLeave();
+    this._cancelEmptyTimer();
+    this._setActivity(null);
     this._killProcess();
     this.clear();
     this.current = null;
@@ -235,6 +348,10 @@ class GuildQueue {
 
 // Сколько ближайших треков греть заранее (на случай быстрых скипов подряд).
 GuildQueue.PREFETCH_COUNT = 2;
+// При скольких оставшихся треках радио начинает долив.
+GuildQueue.RADIO_REFILL_AT = 3;
+// Сколько ждать в пустом голосовом канале перед выходом.
+GuildQueue.EMPTY_CHANNEL_LEAVE_MS = 5 * 60_000;
 
 // Менеджер очередей по серверам.
 const queues = new Map();

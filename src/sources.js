@@ -66,12 +66,19 @@ async function initSources() {
 // подписью; благодаря ей воспроизведение не запускает yt-dlp/Deno повторно.
 // track.streamHeaders — HTTP-заголовки, с которыми yt-dlp добыл эту ссылку:
 // без них googlevideo отвечает 403 Forbidden на запрос ffmpeg.
-function makeTrack({ title, url, duration, thumbnail, requestedBy, searchQuery = null, streamUrl = null, streamHeaders = null, preferTopic = false }) {
-  return { title, url, duration, thumbnail, requestedBy, searchQuery, streamUrl, streamHeaders, preferTopic };
+// track.videoId — id YouTube-видео; нужен радио для дедупликации.
+function makeTrack({ title, url, duration, thumbnail, requestedBy, searchQuery = null, streamUrl = null, streamHeaders = null, preferTopic = false, videoId = null }) {
+  return { title, url, duration, thumbnail, requestedBy, searchQuery, streamUrl, streamHeaders, preferTopic, videoId };
+}
+
+function extractVideoId(url) {
+  const m = (url || '').match(/[?&]v=([\w-]{11})/) || (url || '').match(/youtu\.be\/([\w-]{11})/);
+  return m ? m[1] : null;
 }
 
 function formatDuration(seconds) {
-  if (!seconds || Number.isNaN(seconds)) return 'LIVE';
+  // 0 — валидное значение (начало трека в прогрессе), LIVE — только «неизвестно».
+  if (seconds == null || Number.isNaN(Number(seconds))) return 'LIVE';
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
@@ -112,42 +119,68 @@ async function fullTrack(url, requestedBy) {
     requestedBy,
     streamUrl: audio?.url,
     streamHeaders: audio?.headers,
+    videoId: info.id || extractVideoId(info.webpage_url || url),
   });
 }
 
-// Поиск трека на YouTube через yt-dlp.
-// preferTopic=true: берём 5 кандидатов и предпочитаем канал «… - Topic»
-// (официальное чистое аудио), чтобы не попасть на клип с лишними вставками.
+// --- Скоринг поисковой выдачи: ищем МУЗЫКУ, а не летсплей на 40 минут. ---
+
+// Максимальная «трековая» длительность при текстовом поиске (сек).
+const MAX_SEARCH_DURATION = 7 * 60;
+// Признаки того, что это вообще не музыка (летсплей, стрим, подкаст...).
+const CONTENT_JUNK =
+  /летспле|прохожден|геймпле|gameplay|walkthrough|стрим\b|обзор|подкаст|podcast|реакция|reaction|интервью|interview|эпизод|episode|аудиокнига|audiobook|документальн|\d+\s*(час|hour)/i;
+// Музыка, но не оригинал (каверы, караоке, ремиксы...).
+const MUSIC_JUNK =
+  /\b(karaoke|lyrics?|cover|live|remix|mashup|nightcore|instrumental|sped\s*up|slowed|8d|reverb)\b|кавер|караоке|клип|минус/i;
+
+const isTopicChannel = (e) => /-\s*topic$/i.test((e.channel || e.uploader || '').trim());
+
+function scoreCandidate(e, preferTopic) {
+  let score = 0;
+  const title = e.title || '';
+  if (isTopicChannel(e)) score += preferTopic ? 5 : 3; // официальное чистое аудио
+  const d = Number(e.duration);
+  if (Number.isFinite(d) && d > 0) score += d <= MAX_SEARCH_DURATION ? 2 : -3;
+  if (CONTENT_JUNK.test(title)) score -= 4;
+  if (MUSIC_JUNK.test(title)) score -= preferTopic ? 4 : 2;
+  if (/\bofficial\b|\blyric|официальн/i.test(title)) score += 1;
+  return score;
+}
+
+// Если лучший кандидат набрал меньше — считаем, что музыки в выдаче нет.
+const MIN_GOOD_SCORE = 2;
+
+async function searchCandidates(query) {
+  const { info } = await extractInfo(`ytsearch8:${query}`, { dumpSingleJson: true, flatPlaylist: true });
+  return (info.entries || []).filter((e) => e && e.id);
+}
+
+// Поиск трека на YouTube: берём 8 кандидатов и выбираем лучший по скорингу
+// (Topic-канал, длительность до 7 минут, без летсплеев/каверов; при равенстве
+// очков побеждают просмотры). Если ВСЯ выдача — не музыка (например,
+// «нарратор» находит только летсплеи одноимённого ютубера), делаем второй
+// заход с музыкальной подсказкой: «нарратор» → «нарратор песня».
+// Жёсткого отсева нет — что-то сыграет всегда.
 async function searchYouTube(query, requestedBy, preferTopic = false) {
-  if (preferTopic) {
-    const res = await ytdlp(`ytsearch8:${query}`, { ...COMMON, dumpSingleJson: true, flatPlaylist: true });
-    const entries = (res.entries || []).filter((e) => e && e.id);
-    if (!entries.length) return null;
+  const score = (e) => ({ e, score: scoreCandidate(e, preferTopic) });
+  const bestOf = (arr) =>
+    arr.sort((a, b) => b.score - a.score || (b.e.view_count || 0) - (a.e.view_count || 0))[0];
 
-    const isTopic = (e) => /-\s*topic$/i.test((e.channel || e.uploader || '').trim());
-    // явный мусор, который не должен подменять оригинал
-    const junk = /\b(karaoke|lyrics?|cover|live|remix|mashup|nightcore|instrumental|sped\s*up|slowed|8d|reverb)\b|кавер|караоке|клип|минус/i;
+  const entries = await searchCandidates(query);
+  let scored = entries.map(score);
+  let best = scored.length ? bestOf(scored) : null;
 
-    const chosen =
-      entries.find(isTopic) || // 1) официальное «- Topic» аудио
-      entries.find((e) => !junk.test(e.title || '')) || // 2) первый «чистый»
-      entries[0]; // 3) хоть что-то
-    return fullTrack(chosen.url || `https://www.youtube.com/watch?v=${chosen.id}`, requestedBy);
+  if (!best || best.score < MIN_GOOD_SCORE) {
+    const hint = /[а-яё]/i.test(query) ? 'песня' : 'song';
+    const extra = await searchCandidates(`${query} ${hint}`).catch(() => []);
+    const seen = new Set(entries.map((e) => e.id));
+    scored = scored.concat(extra.filter((e) => !seen.has(e.id)).map(score));
+    if (scored.length) best = bestOf(scored);
   }
 
-  const { info, viaCookies } = await extractInfo(`ytsearch1:${query}`, { dumpSingleJson: true });
-  const e = info.entries ? info.entries[0] : info;
-  if (!e) return null;
-  const audio = viaCookies ? null : pickAudio(e);
-  return makeTrack({
-    title: e.title,
-    url: e.webpage_url || e.url,
-    duration: e.duration,
-    thumbnail: e.thumbnail,
-    requestedBy,
-    streamUrl: audio?.url,
-    streamHeaders: audio?.headers,
-  });
+  if (!best) return null;
+  return fullTrack(best.e.url || `https://www.youtube.com/watch?v=${best.e.id}`, requestedBy);
 }
 
 // Главный резолвер: ссылка/текст -> массив треков.
@@ -166,6 +199,7 @@ async function resolveQuery(query, requestedBy) {
         requestedBy,
         streamUrl: audio?.url,
         streamHeaders: audio?.headers,
+        videoId: info.id || extractVideoId(info.webpage_url || query),
       }),
     ];
   }
@@ -182,6 +216,7 @@ async function resolveQuery(query, requestedBy) {
           duration: e.duration,
           thumbnail: e.thumbnails?.[0]?.url,
           requestedBy,
+          videoId: e.id,
         })
       );
   }
@@ -209,29 +244,25 @@ async function resolveQuery(query, requestedBy) {
 
 // Сколько треков набирать в радио-очередь из YouTube Mix.
 const RADIO_LIMIT = 25;
+// В радио берём только «трековые» длительности — часовые миксы не нужны.
+const RADIO_MAX_DURATION = 10 * 60;
 
-// Радио: похожие треки через YouTube Mix (list=RD<videoId>).
-// Возвращает { seed, tracks }: затравка первой, дальше — ленивые треки микса
-// (без streamUrl; ensureResolved дорезолвит их перед воспроизведением).
-async function resolveRadio(query, requestedBy) {
-  const [seed] = await resolveQuery(query, requestedBy);
-  if (!seed) throw new Error('Ничего не нашёл по этому запросу.');
-  if (!seed.url) await ensureResolved(seed);
-
-  const m = (seed.url || '').match(/[?&]v=([\w-]{11})/) || (seed.url || '').match(/youtu\.be\/([\w-]{11})/);
-  if (!m) throw new Error('Не удалось определить трек-затравку для радио.');
-  const id = m[1];
-
-  const { info } = await extractInfo(`https://www.youtube.com/watch?v=${id}&list=RD${id}`, {
+// Тянет YouTube Mix (list=RD<videoId>) — «похожие треки». Возвращает ленивые
+// треки (без streamUrl; ensureResolved дорезолвит перед воспроизведением),
+// исключая уже виденные id (exclude) и слишком длинные видео.
+async function fetchMix(videoId, requestedBy, { exclude = new Set(), limit = RADIO_LIMIT } = {}) {
+  const { info } = await extractInfo(`https://www.youtube.com/watch?v=${videoId}&list=RD${videoId}`, {
     noPlaylist: false,
     flatPlaylist: true,
     dumpSingleJson: true,
-    playlistEnd: RADIO_LIMIT,
+    playlistEnd: limit,
   });
-  // Первый элемент микса — сама затравка; вместо него ставим уже
-  // отрезолвленный seed, чтобы радио стартовало мгновенно и без дубля.
-  const rest = (info.entries || [])
-    .filter((e) => e && e.id && e.id !== id)
+  return (info.entries || [])
+    .filter((e) => e && e.id && !exclude.has(e.id))
+    .filter((e) => {
+      const d = Number(e.duration);
+      return !Number.isFinite(d) || d <= RADIO_MAX_DURATION;
+    })
     .map((e) =>
       makeTrack({
         title: e.title,
@@ -239,10 +270,26 @@ async function resolveRadio(query, requestedBy) {
         duration: e.duration,
         thumbnail: e.thumbnails?.[0]?.url,
         requestedBy,
+        videoId: e.id,
       })
     );
-  if (!rest.length) throw new Error('YouTube не дал похожих треков для этой затравки.');
-  return { seed, tracks: [seed, ...rest] };
+}
+
+// Радио по запросу: резолвим затравку и набираем её Mix.
+// Возвращает { seed, tracks }: затравка первой (уже отрезолвлена — старт
+// мгновенный), дальше — ленивые треки микса.
+async function resolveRadio(query, requestedBy) {
+  const [seed] = await resolveQuery(query, requestedBy);
+  if (!seed) throw new Error('Ничего не нашёл по этому запросу.');
+  if (!seed.url) await ensureResolved(seed);
+
+  const id = seed.videoId || extractVideoId(seed.url);
+  if (!id) throw new Error('Не удалось определить трек-затравку для радио.');
+  seed.videoId = id;
+
+  const mix = await fetchMix(id, requestedBy, { exclude: new Set([id]) });
+  if (!mix.length) throw new Error('YouTube не дал похожих треков для этой затравки.');
+  return { seed, tracks: [seed, ...mix] };
 }
 
 // Гарантирует, что у трека есть и YouTube-ссылка, и прямая ссылка на аудио.
@@ -257,6 +304,7 @@ async function ensureResolved(track) {
     track.streamUrl = audio?.url;
     track.streamHeaders = audio?.headers;
     if (!track.duration) track.duration = info.duration;
+    if (!track.videoId) track.videoId = info.id || extractVideoId(track.url);
     return track;
   }
 
@@ -267,6 +315,7 @@ async function ensureResolved(track) {
   track.url = found.url;
   track.streamUrl = found.streamUrl;
   track.streamHeaders = found.streamHeaders;
+  track.videoId = found.videoId || extractVideoId(found.url);
   if (!track.duration) track.duration = found.duration;
   if (!track.thumbnail) track.thumbnail = found.thumbnail;
   return track;
@@ -321,4 +370,13 @@ function getStream(track) {
   return { stream: subprocess.stdout, process: subprocess, type: null };
 }
 
-module.exports = { initSources, resolveQuery, resolveRadio, ensureResolved, getStream, formatDuration };
+module.exports = {
+  initSources,
+  resolveQuery,
+  resolveRadio,
+  fetchMix,
+  ensureResolved,
+  getStream,
+  formatDuration,
+  extractVideoId,
+};

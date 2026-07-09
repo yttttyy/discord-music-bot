@@ -1,4 +1,4 @@
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { formatDuration } = require('./sources');
 
 // Единая палитра embed-ов бота.
@@ -21,13 +21,15 @@ function errorEmbed(text) {
   return new EmbedBuilder().setColor(COLORS.error).setDescription(text);
 }
 
-function nowPlayingEmbed(track, { loop = false } = {}) {
+function nowPlayingEmbed(track, { loop = false, elapsed = null } = {}) {
+  const time =
+    elapsed == null ? formatDuration(track.duration) : `${formatDuration(elapsed)} / ${formatDuration(track.duration)}`;
   const embed = new EmbedBuilder()
     .setColor(COLORS.playing)
     .setAuthor({ name: 'Сейчас играет' })
     .setTitle(track.title)
     .addFields(
-      { name: 'Длительность', value: `\`${formatDuration(track.duration)}\``, inline: true },
+      { name: 'Длительность', value: `\`${time}\``, inline: true },
       { name: 'Заказал', value: track.requestedBy || '—', inline: true }
     );
   if (track.url) embed.setURL(track.url);
@@ -55,33 +57,53 @@ function addedManyEmbed(count) {
   return successEmbed(`Добавил **${count}** треков в очередь.`);
 }
 
-function queueEmbed(queue) {
+function queueEmbed(queue, page = 1) {
+  const perPage = 10;
+  const total = queue.tracks.length;
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  const p = Math.min(Math.max(1, Math.floor(page) || 1), pages);
+
   const embed = new EmbedBuilder().setColor(COLORS.playing).setTitle('Очередь');
 
   const lines = [];
   if (queue.current) {
     const loopMark = queue.loop ? ' — повтор' : '';
-    lines.push(`**Сейчас играет:** ${queue.current.title} \`(${formatDuration(queue.current.duration)})\`${loopMark}`);
+    const time = `${formatDuration(queue.elapsedSeconds())} / ${formatDuration(queue.current.duration)}`;
+    lines.push(`**Сейчас играет:** ${queue.current.title} \`(${time})\`${loopMark}`);
+    if (queue.current.thumbnail) embed.setThumbnail(queue.current.thumbnail);
     lines.push('');
   }
 
-  if (queue.tracks.length) {
+  if (total) {
     lines.push('**Далее:**');
-    queue.tracks.slice(0, 10).forEach((t, i) => {
-      lines.push(`\`${i + 1}.\` ${t.title} \`(${formatDuration(t.duration)})\``);
+    const start = (p - 1) * perPage;
+    queue.tracks.slice(start, start + perPage).forEach((t, i) => {
+      lines.push(`\`${start + i + 1}.\` ${t.title} \`(${formatDuration(t.duration)})\``);
     });
-    if (queue.tracks.length > 10) lines.push(`…и ещё **${queue.tracks.length - 10}**`);
   } else {
     lines.push('_В очереди больше ничего нет._');
   }
   embed.setDescription(lines.join('\n'));
 
   const known = queue.tracks.filter((t) => Number.isFinite(t.duration));
-  const total = known.reduce((sum, t) => sum + t.duration, 0);
-  embed.setFooter({
-    text: `Всего в очереди: ${queue.tracks.length}` + (known.length ? ` · ${formatDuration(total)}` : ''),
-  });
+  const sum = known.reduce((s, t) => s + t.duration, 0);
+  const parts = [`Страница ${p}/${pages}`, `всего: ${total}`];
+  if (known.length) parts.push(formatDuration(sum));
+  if (queue.radio) parts.push('радио');
+  embed.setFooter({ text: parts.join(' · ') });
   return embed;
+}
+
+// Кнопки управления под «Сейчас играет» (customId обрабатывается в index.js).
+function controlButtons(paused = false) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('music:toggle')
+      .setLabel(paused ? 'Продолжить' : 'Пауза')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('music:skip').setLabel('Скип').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('music:stop').setLabel('Стоп').setStyle(ButtonStyle.Secondary)
+  );
 }
 
 function helpEmbed(list, prefix) {
@@ -102,4 +124,5 @@ module.exports = {
   addedManyEmbed,
   queueEmbed,
   helpEmbed,
+  controlButtons,
 };
