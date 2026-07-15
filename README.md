@@ -1,4 +1,4 @@
-# 🎵 Discord Music Bot
+# Discord Music Bot
 
 Музыкальный бот для Discord с воспроизведением из **YouTube** и **Spotify**, очередью и базовыми командами управления.
 
@@ -17,7 +17,7 @@
 - Управление (skip/stop/pause/…) — только для тех, кто в голосовом канале с ботом
 - Пустой войс: пауза сразу, выход через 5 минут; пустая очередь — выход через 10 минут
 
-> Spotify напрямую не стримится (это технически невозможно). Бот берёт название трека из Spotify (через публичный embed — **без API-ключей и без Premium**) и находит эквивалент на YouTube.
+> Spotify напрямую не стримится. Бот берёт название трека из Spotify (через публичный embed — **без API-ключей и без Premium**) и находит эквивалент на YouTube.
 
 ## Команды
 
@@ -46,18 +46,18 @@
 
 ## Установка
 
-1. Установи зависимости:
+1. Установка зависимостей:
    ```powershell
    npm install
    ```
-2. Создай бота на https://discord.com/developers/applications, включи в разделе **Bot** опцию **MESSAGE CONTENT INTENT**.
-3. Скопируй настройки:
+2. Создать бота на https://discord.com/developers/applications, включить в разделе **Bot** опцию **MESSAGE CONTENT INTENT**.
+3. Скопировать настройки:
    ```powershell
    Copy-Item .env.example .env
    ```
-   Заполни `DISCORD_TOKEN`. Для Spotify ничего настраивать не нужно.
-4. Пригласи бота на сервер с правами: `Connect`, `Speak`, `Send Messages`, `Read Message History`.
-5. Запусти:
+   Заполнить `DISCORD_TOKEN`. 
+4. Пригласить бота на сервер с правами: `Connect`, `Speak`, `Send Messages`, `Read Message History`.
+5. Запустить:
    ```powershell
    npm start
    ```
