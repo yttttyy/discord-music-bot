@@ -136,9 +136,27 @@ const MUSIC_JUNK =
 
 const isTopicChannel = (e) => /-\s*topic$/i.test((e.channel || e.uploader || '').trim());
 
-function scoreCandidate(e, preferTopic) {
+const tokenize = (s) =>
+  (s || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 1);
+
+function scoreCandidate(e, preferTopic, queryTokens) {
   let score = 0;
   const title = e.title || '';
+
+  // Релевантность запросу: популярный, но чужой клип не должен обходить
+  // скромный правильный трек (напр. «проклятье greyrock» → клип ГРАЙ).
+  const hay = `${title} ${e.channel || e.uploader || ''}`.toLowerCase();
+  if (queryTokens.length) {
+    const matched = queryTokens.filter((t) => hay.includes(t));
+    const ratio = matched.length / queryTokens.length;
+    score += Math.round(ratio * 4);
+    if (ratio === 0) score -= 5; // ни одного слова запроса — это вообще не то
+  }
+
   if (isTopicChannel(e)) score += preferTopic ? 5 : 3; // официальное чистое аудио
   const d = Number(e.duration);
   if (Number.isFinite(d) && d > 0) score += d <= MAX_SEARCH_DURATION ? 2 : -3;
@@ -157,15 +175,16 @@ async function searchCandidates(query) {
 }
 
 // Поиск трека на YouTube: берём 8 кандидатов и выбираем лучший по скорингу
-// (Topic-канал, длительность до 7 минут, без летсплеев/каверов; при равенстве
-// очков побеждают просмотры). Если ВСЯ выдача — не музыка (например,
-// «нарратор» находит только летсплеи одноимённого ютубера), делаем второй
-// заход с музыкальной подсказкой: «нарратор» → «нарратор песня».
-// Жёсткого отсева нет — что-то сыграет всегда.
+// (совпадение с запросом, Topic-канал, длительность до 7 минут, без
+// летсплеев/каверов; при равенстве очков — исходный порядок выдачи YouTube,
+// их ранжирование само по себе сильный сигнал релевантности). Если ВСЯ
+// выдача — не музыка (например, «нарратор» находит только летсплеи
+// одноимённого ютубера), делаем второй заход с музыкальной подсказкой:
+// «нарратор» → «нарратор песня». Жёсткого отсева нет — что-то сыграет всегда.
 async function searchYouTube(query, requestedBy, preferTopic = false) {
-  const score = (e) => ({ e, score: scoreCandidate(e, preferTopic) });
-  const bestOf = (arr) =>
-    arr.sort((a, b) => b.score - a.score || (b.e.view_count || 0) - (a.e.view_count || 0))[0];
+  const queryTokens = tokenize(query);
+  const score = (e, i) => ({ e, i, score: scoreCandidate(e, preferTopic, queryTokens) });
+  const bestOf = (arr) => arr.sort((a, b) => b.score - a.score || a.i - b.i)[0];
 
   const entries = await searchCandidates(query);
   let scored = entries.map(score);
@@ -175,7 +194,7 @@ async function searchYouTube(query, requestedBy, preferTopic = false) {
     const hint = /[а-яё]/i.test(query) ? 'песня' : 'song';
     const extra = await searchCandidates(`${query} ${hint}`).catch(() => []);
     const seen = new Set(entries.map((e) => e.id));
-    scored = scored.concat(extra.filter((e) => !seen.has(e.id)).map(score));
+    scored = scored.concat(extra.filter((e) => !seen.has(e.id)).map((e, i) => score(e, entries.length + i)));
     if (scored.length) best = bestOf(scored);
   }
 
