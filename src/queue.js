@@ -119,7 +119,7 @@ class GuildQueue {
         this._lastVideoId = vid; // радио доливает микс от последнего сыгранного
         this._radioSeen.add(vid);
       }
-      this._setActivity(next.title);
+      this._setActivity(next);
 
       const buttons = getSetting(this.guildId, 'buttons', true);
       this._send(nowPlayingEmbed(next, { loop: this.loop }), buttons ? [controlButtons(false)] : undefined);
@@ -239,12 +239,16 @@ class GuildQueue {
 
   // Статус бота в Discord. Он глобальный: при игре в нескольких гильдиях
   // показывается последний запущенный трек — осознанное упрощение.
-  _setActivity(title) {
+  // Тип Streaming рисует фиолетовый бейдж «стримит» с кликабельной ссылкой,
+  // но Discord рендерит его только с youtube/twitch URL — без ссылки
+  // откатываемся на «слушает».
+  _setActivity(track) {
     try {
       const user = this.textChannel?.client?.user;
       if (!user) return;
-      if (title) user.setActivity(title, { type: ActivityType.Listening });
-      else user.setPresence({ activities: [] });
+      if (!track) return user.setPresence({ activities: [] });
+      if (track.url) user.setActivity(track.title, { type: ActivityType.Streaming, url: track.url });
+      else user.setActivity(track.title, { type: ActivityType.Listening });
     } catch {}
   }
 
