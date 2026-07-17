@@ -34,7 +34,9 @@ function nowPlayingEmbed(track, { loop = false, elapsed = null } = {}) {
     );
   if (track.url) embed.setURL(track.url);
   if (track.thumbnail) embed.setThumbnail(track.thumbnail);
-  if (loop) embed.addFields({ name: 'Режим', value: 'Повтор', inline: true });
+  if (loop) {
+    embed.addFields({ name: 'Режим', value: loop === 'queue' ? 'Повтор очереди' : 'Повтор', inline: true });
+  }
   return embed;
 }
 
@@ -67,7 +69,7 @@ function queueEmbed(queue, page = 1) {
 
   const lines = [];
   if (queue.current) {
-    const loopMark = queue.loop ? ' — повтор' : '';
+    const loopMark = queue.loop ? (queue.loop === 'queue' ? ' — повтор очереди' : ' — повтор') : '';
     const time = `${formatDuration(queue.elapsedSeconds())} / ${formatDuration(queue.current.duration)}`;
     lines.push(`**Сейчас играет:** ${queue.current.title} \`(${time})\`${loopMark}`);
     if (queue.current.thumbnail) embed.setThumbnail(queue.current.thumbnail);

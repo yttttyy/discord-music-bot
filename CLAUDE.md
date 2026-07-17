@@ -39,7 +39,8 @@ Flow of a `!play` request:
 - **Infinite radio**: `!radio` seeds the queue from a YouTube Mix (`fetchMix`, `list=RD<id>`) and sets `queue.radio = true`. When ≤ `RADIO_REFILL_AT` tracks remain after a track starts, `_refillRadio()` fetches another mix seeded from the last played track (`_lastVideoId`), deduped via the `_radioSeen` set of videoIds. Bare `!radio` turns it off.
 - **Empty voice channel**: `voiceStateUpdate` → `onChannelEmpty()` auto-pauses (flag `_autoPaused`, manual pauses are not auto-resumed) and starts a 5-min leave timer; `onChannelActive()` cancels it and resumes only if auto-paused. Separate from the 10-min empty-queue leave timer.
 - **Queue lifecycle**: empty queue starts a leave timer (`_scheduleLeave`); `createQueue` wraps `destroy()` to also remove the queue from the guild Map — always go through `destroy()`, never tear down the connection directly.
-- **Single queue-advance point**: only the `Idle` handler pulls the next track. The `error` handler and `skip()` just set `_advanceWithoutLoop` (suppresses the loop re-queue once) and force `player.stop(true)`; advancing from anywhere else risks double-shifting the queue.
+- **Single queue-advance point**: only the `Idle` handler pulls the next track. The `error` handler sets `_dropCurrent` (broken track is never re-queued) and `skip()` sets `_skipRequested`, then both force `player.stop(true)`; advancing from anywhere else risks double-shifting the queue.
+- **Loop modes**: `queue.loop` is `false | 'track' | 'queue'` (`!loop` / `!loop all`). Track mode unshifts the finished track and sets `_loopRepeat`, which suppresses the repeated now-playing embed/status; queue mode pushes the finished track to the end (skip also cycles it to the end rather than dropping it).
 
 ## Configuration
 

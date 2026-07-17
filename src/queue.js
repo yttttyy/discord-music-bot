@@ -20,8 +20,10 @@ class GuildQueue {
     this.tracks = [];
     this.current = null;
     this.currentProcess = null; // дочерний процесс yt-dlp текущего трека
-    this.loop = false; // повтор текущего трека
-    this._advanceWithoutLoop = false; // разово подавить повтор (skip / ошибка трека)
+    this.loop = false; // false | 'track' (повтор трека) | 'queue' (повтор всей очереди)
+    this._dropCurrent = false; // разово не возвращать трек в очередь (ошибка трека)
+    this._skipRequested = false; // текущий переход — это skip (влияет на режимы повтора)
+    this._loopRepeat = false; // сейчас стартует тот же трек по повтору — не спамим embed
     this.radio = false; // бесконечное радио: доливать похожие треки
     this._radioSeen = new Set(); // videoId всего, что уже было в очереди
     this._radioRefilling = false;
@@ -46,10 +48,17 @@ class GuildQueue {
     // Это ЕДИНСТВЕННАЯ точка продвижения очереди по событиям плеера.
     this.player.on(AudioPlayerStatus.Idle, () => {
       if (this.destroyed) return;
-      if (this.loop && this.current && !this._advanceWithoutLoop) {
-        this.tracks.unshift(this.current);
+      const finished = this.current;
+      if (finished && !this._dropCurrent) {
+        if (this.loop === 'track' && !this._skipRequested) {
+          this.tracks.unshift(finished);
+          this._loopRepeat = true; // тот же трек — «Сейчас играет» не повторяем
+        } else if (this.loop === 'queue') {
+          this.tracks.push(finished); // круговая очередь; skip тоже уводит трек в конец
+        }
       }
-      this._advanceWithoutLoop = false;
+      this._dropCurrent = false;
+      this._skipRequested = false;
       this.current = null;
       this._processQueue();
     });
@@ -59,8 +68,8 @@ class GuildQueue {
       this._send(errorEmbed('Ошибка при воспроизведении трека, пропускаю.'));
       // Очередь не трогаем: после error плеер уходит в Idle, и продвижение
       // случится там ровно один раз (иначе error+Idle снимали бы два трека).
-      // Повтор подавляем, чтобы битый трек не крутился бесконечно.
-      this._advanceWithoutLoop = true;
+      // Битый трек не возвращаем ни в одном режиме повтора.
+      this._dropCurrent = true;
       this.player.stop(true);
     });
 
@@ -90,6 +99,8 @@ class GuildQueue {
 
   async _processQueue() {
     if (this.destroyed) return;
+    const repeat = this._loopRepeat;
+    this._loopRepeat = false;
     const next = this.tracks.shift();
     if (!next) {
       // Очередь пуста — таймер на выход из канала; статус бота сбрасываем.
@@ -119,10 +130,13 @@ class GuildQueue {
         this._lastVideoId = vid; // радио доливает микс от последнего сыгранного
         this._radioSeen.add(vid);
       }
-      this._setActivity(next);
 
-      const buttons = getSetting(this.guildId, 'buttons', true);
-      this._send(nowPlayingEmbed(next, { loop: this.loop }), buttons ? [controlButtons(false)] : undefined);
+      // При повторе того же трека (loop) не спамим ни embed, ни статус.
+      if (!repeat) {
+        this._setActivity(next);
+        const buttons = getSetting(this.guildId, 'buttons', true);
+        this._send(nowPlayingEmbed(next, { loop: this.loop }), buttons ? [controlButtons(false)] : undefined);
+      }
 
       this._prefetchNext(); // пока играет текущий — заранее резолвим следующий
       if (this.radio && this.tracks.length <= GuildQueue.RADIO_REFILL_AT) this._refillRadio();
@@ -189,8 +203,9 @@ class GuildQueue {
     // буферизованные кадры могут «вылезти» микрозвуком после паузы.
     this._killProcess();
     this.currentResource = null;
-    // skip должен уводить к СЛЕДУЮЩЕМУ треку даже при включённом loop.
-    this._advanceWithoutLoop = true;
+    // skip уводит к СЛЕДУЮЩЕМУ треку: при повторе трека — без re-queue,
+    // при повторе очереди — текущий уйдёт в конец (см. Idle-обработчик).
+    this._skipRequested = true;
     // stop() переведёт плеер в Idle -> сработает _processQueue (трек уже прогрет).
     // Резкого щелчка нет: следующий трек плавно появляется через ffmpeg afade.
     this.player.stop(true);
