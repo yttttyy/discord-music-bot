@@ -372,4 +372,9 @@ function createQueue(guildId, voiceChannel, textChannel) {
   return q;
 }
 
-module.exports = { getQueue, createQueue };
+// Погасить все очереди (graceful shutdown: SIGTERM от docker/systemd).
+function destroyAll() {
+  for (const q of [...queues.values()]) q.destroy();
+}
+
+module.exports = { getQueue, createQueue, destroyAll };

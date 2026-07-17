@@ -10,8 +10,9 @@ Discord music bot (CommonJS, Node.js 18+) that plays audio from YouTube and Spot
 
 - Run: `npm start` (requires a filled `.env` with `DISCORD_TOKEN`; copy from `.env.example`)
 - No tests, linter, or build step exists.
+- Deploy: `docker compose up -d --build` — the image bundles ffmpeg, python3 (yt-dlp runtime on Linux), and Deno; `data/` is a volume. SIGTERM/SIGINT trigger graceful shutdown (`destroyAll()` in `src/queue.js`).
 
-External runtime requirements: FFmpeg in PATH; Deno (yt-dlp uses it to solve YouTube's signature JS challenge — `src/index.js` prepends `~/.deno/bin` to PATH automatically).
+External runtime requirements (outside Docker): FFmpeg in PATH; Deno (yt-dlp uses it to solve YouTube's signature JS challenge — `src/index.js` prepends `~/.deno/bin` to PATH automatically).
 
 ## Architecture
 

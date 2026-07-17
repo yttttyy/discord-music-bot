@@ -55,12 +55,66 @@
    ```powershell
    Copy-Item .env.example .env
    ```
-   Заполнить `DISCORD_TOKEN`. 
-4. Пригласить бота на сервер с правами: `Connect`, `Speak`, `Send Messages`, `Read Message History`.
+   Заполнить `DISCORD_TOKEN`.
+4. Пригласить бота на сервер (см. «Права при инвайте» ниже).
 5. Запустить:
    ```powershell
    npm start
    ```
+
+## Права при инвайте (минимум, чтобы бот «не натворил лишнего»)
+
+В Dev Portal (**Bot**): включи только **MESSAGE CONTENT INTENT** (Presence и Server Members не нужны). Опцию **Public Bot** можно выключить — тогда бота пригласишь только ты.
+
+Ссылка-инвайт (подставь Application ID из Dev Portal):
+
+```
+https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot&permissions=3230720
+```
+
+`3230720` — это ровно шесть разрешений:
+
+| Разрешение | Зачем |
+|---|---|
+| View Channels | видеть каналы с командами |
+| Send Messages | отвечать |
+| Embed Links | все ответы бота — embed-ы, без этого они не отобразятся |
+| Read Message History | reply на сообщения команд |
+| Connect | заходить в голосовой канал |
+| Speak | играть музыку |
+
+**Не выдавай**: Administrator, Manage Server/Channels/Messages/Roles, Mention Everyone, Move Members, Priority Speaker — боту они не нужны ни для одной функции.
+
+## Деплой на сервер (бесплатно, 24/7)
+
+Бот тяжелее обычного (FFmpeg + yt-dlp + Deno), поэтому «панельные» бесплатные хостинги на 256 МБ не подходят. Рабочие бесплатные варианты — облачные VM:
+
+- **Oracle Cloud Always Free** (рекомендуется): ARM VM до 4 OCPU / 24 ГБ RAM навсегда бесплатно. Для регистрации нужна карта (списаний нет). Создай instance **VM.Standard.A1.Flex** (хватит 2 OCPU / 12 ГБ), образ Ubuntu 24.04. Нюанс: в популярных регионах свободных ARM-машин может не быть — пробуй другой Availability Domain или регион, либо создавай по расписанию.
+- **Запасной план — Google Cloud e2-micro** (Always Free, регионы `us-west1`/`us-central1`/`us-east1`): 1 ГБ RAM — впритык, но хватает; добавь swap:
+  ```bash
+  sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+  ```
+
+Дальше на любой VM одинаково (всё уже упаковано в Docker-образ — ffmpeg, Deno, yt-dlp внутри):
+
+```bash
+# 1. Docker
+curl -fsSL https://get.docker.com | sh
+
+# 2. Код и настройки
+git clone https://github.com/yttttyy/discord-music-bot.git && cd discord-music-bot
+cp .env.example .env && nano .env   # вставь DISCORD_TOKEN
+
+# 3. Запуск
+sudo docker compose up -d --build
+sudo docker compose logs -f         # убедись, что бот вошёл
+```
+
+- Автозапуск после ребута VM — уже настроен (`restart: unless-stopped`).
+- Обновление: `git pull && sudo docker compose up -d --build`.
+- Настройки серверов хранятся в `./data` и переживают пересборку.
+- Видео 18+ на сервере: см. комментарии в `.env.example` и `docker-compose.yml` (cookies.txt).
 
 ## Требования
 

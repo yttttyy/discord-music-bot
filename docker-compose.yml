@@ -1,0 +1,13 @@
+services:
+  bot:
+    build: .
+    container_name: discord-music-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # настройки серверов переживают пересборку образа
+      - ./data:/app/data
+      # для видео 18+ на сервере: экспортируй cookies.txt и раскомментируй,
+      # в .env поставь YT_COOKIES_FILE=/app/cookies.txt
+      # - ./cookies.txt:/app/cookies.txt:ro
+    stop_grace_period: 10s

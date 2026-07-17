@@ -14,7 +14,7 @@ const { Client, GatewayIntentBits, Partials, MessageFlags } = require('discord.j
 const config = require('./config');
 const { initSources } = require('./sources');
 const { commands } = require('./commands');
-const { getQueue } = require('./queue');
+const { getQueue, destroyAll } = require('./queue');
 const { infoEmbed, errorEmbed } = require('./embeds');
 const { memberInSameVoice } = require('./utils');
 
@@ -96,6 +96,24 @@ client.on('voiceStateUpdate', (oldState, newState) => {
 });
 
 process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
+
+// Аккуратное выключение: docker stop / systemd шлют SIGTERM — гасим очереди
+// (ffmpeg-процессы, голосовые соединения), затем закрываем клиент.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Получен ${signal}, выключаюсь...`);
+  try {
+    destroyAll();
+  } catch {}
+  try {
+    await client.destroy();
+  } catch {}
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 (async () => {
   await initSources();
