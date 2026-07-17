@@ -30,12 +30,12 @@ function nowPlayingEmbed(track, { loop = false, elapsed = null } = {}) {
     .setTitle(track.title)
     .addFields(
       { name: 'Длительность', value: `\`${time}\``, inline: true },
-      { name: 'Заказал', value: track.requestedBy || '—', inline: true }
+      { name: 'Заказал', value: `\`${track.requestedBy || '—'}\``, inline: true }
     );
   if (track.url) embed.setURL(track.url);
   if (track.thumbnail) embed.setThumbnail(track.thumbnail);
   if (loop) {
-    embed.addFields({ name: 'Режим', value: loop === 'queue' ? 'Повтор очереди' : 'Повтор', inline: true });
+    embed.addFields({ name: 'Режим', value: `\`${loop === 'queue' ? 'Повтор очереди' : 'Повтор'}\``, inline: true });
   }
   return embed;
 }
